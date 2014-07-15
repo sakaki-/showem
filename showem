@@ -1,0 +1,218 @@
+#!/bin/bash
+#
+# View output of a parallel emerge from a separate (real or virtual) terminal.
+#
+# Copyright (c) 2014 sakaki <sakaki@deciban.com>
+#
+# License (GPL v3.0)
+# ------------------
+#
+# This program is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#
+
+# Scroll to the bottom of this script to follow the main program flow.
+
+set -u
+
+# ********************** variables ********************* 
+PROGNAME="$(basename "${0}")"
+VERSION="1.0.0"
+PORTAGE_BUILD_DIR="/var/tmp/portage"
+MAIN_LOG_DIR="/var/log"
+EMERGE_FETCH_LOG="emerge-fetch.log"
+MIN_COLS_ALLOWED=80
+MIN_LINES_ALLOWED=24
+LOG_FILE_STALE_MINS=5
+RED_TEXT="$(tput setaf 1)"
+GREEN_TEXT="$(tput setaf 2)"
+RESET_ATTS="$(tput sgr0)"
+# program arguments (booleans in this case)
+declare -i ARG_HELP=0 ARG_VERSION=0
+
+# ***************** various functions ****************** 
+cleanup_and_exit_with_code() {
+    # add any additional cleanup code here
+    trap - EXIT
+    exit $1
+}
+die() {
+    echo
+    echo -e "${PROGNAME}: Error: ${1} - exiting" >&2
+    cleanup_and_exit_with_code 1
+}
+check_that_stdout_is_terminal() {
+    if [ ! -t 1 ]; then
+        die "stdout is not a terminal"
+    fi
+}
+trap_cleanup() {
+    trap - SIGHUP SIGQUIT SIGINT SIGTERM SIGKILL EXIT
+    die "Caught signal"
+}
+trap trap_cleanup SIGHUP SIGQUIT SIGINT SIGTERM SIGKILL EXIT
+print_line_divider() {
+    local DIVIDER_SYMBOL="${1:--}" # use "-" as default symbol if no 1st arg
+    local LINE_END="${2:-\n}" # add carriage return if no 2nd arg
+    local NUM_SYMBOLS=$(($(tput cols)-0))
+    printf "${GREEN_TEXT}"
+    printf "%0.s${DIVIDER_SYMBOL}" $(seq 1 ${NUM_SYMBOLS})}
+    printf "${RESET_ATTS}"
+    if [[ ${LINE_END} != "NONE" ]]; then
+        printf "${LINE_END}"
+    fi
+}
+print_package_name_divider() {
+    local DIVIDER_SYMBOL="${1}"
+    local PACKAGE_NAME="${2}"
+    local WIDTH=${3}
+    local PAD_CHARS=$((WIDTH-${#PACKAGE_NAME}))
+    local PAD_LEFT=$((PAD_CHARS/2))
+    local PAD_RIGHT=$((PAD_CHARS-PAD_LEFT))
+    printf "${GREEN_TEXT}"
+    printf "%0.s${DIVIDER_SYMBOL}" $(seq 1 ${PAD_LEFT})}
+    printf "${PACKAGE_NAME}"
+    printf "%0.s${DIVIDER_SYMBOL}" $(seq 1 ${PAD_RIGHT})}
+    printf "${RESET_ATTS}\n"
+}
+warn_if_log_too_old() {
+    local LOG_TO_CHECK="${1}"
+    local FILE_MOD_TIME="$(stat -c %Y "${LOG_TO_CHECK}")"
+    local CURRENT_TIME="$(date +%s)"
+    local SECONDS_SINCE_UPDATE=$((CURRENT_TIME-FILE_MOD_TIME))
+    # if our most recent log is too old, it's probably left over from a failed
+    # build, so print a warning
+    if ((SECONDS_SINCE_UPDATE > (LOG_FILE_STALE_MINS*60) && FILE_MOD_TIME > 0)); then
+        echo -e "${RED_TEXT}WARNING - stale log: failed build? (consider deleting from ${PORTAGE_BUILD_DIR})${RESET_ATTS}"
+        return 1
+    fi
+    return 0
+}
+print_usage() {
+    cat << EOF
+Usage: ${PROGNAME} [options]
+
+Options:
+  -h, --help            show this help message and exit
+  -V, --version         display the version number of ${PROGNAME} and exit
+EOF
+}
+print_help() {
+    cat << EOF
+${PROGNAME} - monitor the progress of a parallel emerge
+EOF
+    print_usage
+}
+print_version() {
+    printf "%s\n" "${VERSION}"
+}
+display_usage_message_and_bail_out() {
+    print_usage >&2
+    exit 1
+}
+process_command_line_options() {
+    local TEMP
+    declare -i RC
+    TEMP="$(getopt -o hV --long help,version -n "${PROGNAME}" -- "${@}")"
+    RC="${?}"
+    if ((RC!=0)); then
+        display_usage_message_and_bail_out
+    fi
+    eval set -- "${TEMP}"
+
+    # extract options and their arguments into variables.
+    while true ; do
+        case "${1}" in
+            -h|--help) ARG_HELP=1 ; shift ;;
+            -V|--version) ARG_VERSION=1 ; shift ;;
+            --) shift ; break ;;
+            *) die "Internal error!" ;;
+        esac
+    done
+    # process 'perform-then-exit' options
+    if ((ARG_HELP==1)); then
+        print_help
+        cleanup_and_exit_with_code 0
+    elif ((ARG_VERSION==1)); then
+        print_version
+        cleanup_and_exit_with_code 0
+    fi
+}
+main_monitor_loop() {
+    cd /
+    while true
+    do
+        # don't try to cope with displays that are too small
+        COLS_TO_ASSUME="$(tput cols)"
+        LINES_TO_ASSUME="$(tput lines)"
+        if ((COLS_TO_ASSUME<MIN_COLS_ALLOWED||LINES_TO_ASSUME<MIN_LINES_ALLOWED))
+        then
+            clear
+            echo "Please resize your terminal to >= ${MIN_COLS_ALLOWED} cols x ${MIN_LINES_ALLOWED} lines"
+            echo "(Ctrl-c to exit this viewer)"
+            sleep 1
+            continue
+        fi
+        NUM_DOWNLOAD_LINES=$((LINES_TO_ASSUME/5)) # lines to show download log
+        LINES_USED=5 # minimum even when no content to print
+        # find single most recent log file in /var/tmp/portage, if any
+        if [ -d "${PORTAGE_BUILD_DIR}" ]; then
+            CURRENT_LOG=$(find "${PORTAGE_BUILD_DIR}" -name '*.log' -type f \
+                -printf '%T@ "%p"\n' | sort -nr | head -1 | cut -d'"' -f2)
+        else
+            CURRENT_LOG=""
+        fi
+        # get full path of fetch log, but only if modified less than 1 minute ago
+        FETCH_LOG=$(find "${MAIN_LOG_DIR}" -maxdepth 1 -name "${EMERGE_FETCH_LOG}" \
+            -type f -mmin -1 -print)
+        # display a summary
+        clear
+        print_line_divider "="
+        if [ -z "${FETCH_LOG}" ]; then
+            echo "Monitoring: Portage background download log static for >= 1 minute."
+        else
+            echo "Tail of Portage background download log:"
+            print_line_divider 
+            tail -n $((NUM_DOWNLOAD_LINES+1)) "${FETCH_LOG}" | sed -e '$a\' | \
+                fold -w ${COLS_TO_ASSUME} | tail -n ${NUM_DOWNLOAD_LINES}
+            ((LINES_USED+=(NUM_DOWNLOAD_LINES+1)))
+        fi
+        print_line_divider "="
+        if [ -z "${CURRENT_LOG}" ]; then       
+            echo "Monitoring: no current Portage build log found (Ctrl-c to exit this viewer)."
+            CURRENT_LOG="No Portage build log currently found"
+        else
+            echo "Tail of most recent Portage build log (Ctrl-c to exit this viewer):"
+            warn_if_log_too_old "${CURRENT_LOG}"
+            ((LINES_USED+=${?}))
+            CURRENT_PACKAGE_NAME=$(echo "${CURRENT_LOG#${PORTAGE_BUILD_DIR}/}" |\
+                cut -d '/' -f 1-2)
+            print_package_name_divider "-" "${CURRENT_PACKAGE_NAME}" $COLS_TO_ASSUME
+            ((LINES_USED++))
+            LINES_LEFT=$((LINES_TO_ASSUME-LINES_USED))
+            tail -n $((LINES_LEFT+1)) "${CURRENT_LOG}" | sed -e '$a\' | \
+                fold -w ${COLS_TO_ASSUME} | tail -n ${LINES_LEFT}
+        fi
+        print_line_divider "=" "NONE"
+        # Set xterm title to show current build log relative path
+        echo -ne "\033]0;${PROGNAME}: ${CURRENT_LOG#${PORTAGE_BUILD_DIR}/}\007"
+
+        sleep 1
+    done
+}
+# *************** start of script proper ***************
+check_that_stdout_is_terminal
+process_command_line_options "${@}"
+main_monitor_loop # runs until Ctrl-c calls trap-handler
+cleanup_and_exit_with_code 1 # so, should not get here
+# **************** end of script proper ****************

@@ -1,0 +1,58 @@
+.TH SHOWEM 1 "Version 1.0.0: July 2014"
+.SH NAME
+showem \- monitor the progress of a parallel \fBemerge\fR(1)
+.SH SYNOPSIS
+.B showem
+[\fIoptions\fR]
+.SH DESCRIPTION
+.B showem
+is a very simple utility script, which allows you to monitor the progress of
+a parallel \fBemerge\fR(1). 
+
+When invoked, it shows a split screen display, which updates once a second.
+The top part shows the tail of the current \fBPortage\fR(5) download log, 
+and the lower part shows the tail of the most recent \fBPortage\fR(5)
+build log.
+
+The download log display is cleared after 1 minute's inactivity; however, the
+build log is retained (even if stale) - this allows you to quickly see
+where a build has failed.
+
+The path of the build log is displayed in the title bar of the window. If the
+window is resized, the display is adapted automatically to fit; however, a
+minimum size of 80 columns and 24 rows is required.
+
+Exit \fBshowem\fR using \fBCtrl-c\fR, when done.
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Displays a short help screen, and exits.
+.TP
+.BR \-V ", " \-\-version
+Displays the version number of \fBshowem\fR, and exits.
+.SH COMPATIBILITY
+Although \fBshowem\fR uses \fBtput\fR(1) to access the number of columns and rows,
+and to set colours, it does use an \fBxterm\fR(1) escape sequence to change
+the window title.
+
+It should work under most modern terminal emulators, including Gnome's. 
+.SH EXIT STATUS
+The exit status is 1 if an error occurred, and 0 otherwise.
+.SH NOTES
+By default, \fBPortage\fR(5) has the 'parallel-fetch' feature turned on - this means it can begin fetching tarballs for packages whose build hasn't started yet. These files are what get displayed in the \fI/var/log/emerge-fetch.log\fR file, and shown in the top 'pane' of \fBshowem\fR. However, it is entirely possible that one or more running \fBemerge\fR(1) processes will \fIalso\fR be downloading files, in which case you may see file download information in the bottom 'pane' of \fBshowem\fR as well.
+.SH COPYRIGHT
+.nf
+Copyright \(co 2014 sakaki
+License GPLv3+ (GNU GPL version 3 or later)
+<http://gnu.org/licenses/gpl.html>
+
+This is free software, you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+.fi
+.SH AUTHORS
+sakaki \(em send bug reports or comments to <sakaki@deciban.com>
+.SH "SEE ALSO"
+.BR emerge (1),
+.BR tput (1),
+.BR xterm (1),
+.BR portage (5).
