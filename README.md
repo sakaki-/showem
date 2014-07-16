@@ -14,5 +14,5 @@ Exit **showem** using Ctrl-c, when done.
 
 ## Installation
 
-**showem** is best installed (on Gentoo) via its ebuild, available as part of the **sakaki-tools** overlay (available on GitHub).
+**showem** is best installed (on Gentoo) via its ebuild, available as part of the **sakaki-tools** [overlay](https://github.com/sakaki-/sakaki-tools).
 Full instructions are provided on the [Gentoo wiki](https://wiki.gentoo.org/wiki/) (forthcoming).
