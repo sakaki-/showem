@@ -15,4 +15,4 @@ Exit **showem** using Ctrl-c, when done.
 ## Installation
 
 **showem** is best installed (on Gentoo) via its ebuild, available as part of the **sakaki-tools** [overlay](https://github.com/sakaki-/sakaki-tools).
-Full instructions are provided as part of the [**EFI Gentoo End to End Install**](https://wiki.gentoo.org/wiki/EFI_Gentoo_End_to_End_Install) tutorial, on the Gentoo wiki.
+Full instructions are provided as part of the [**Sakaki's EFI Install Guide**](https://wiki.gentoo.org/wiki/Sakaki's_EFI_Install_Guide) tutorial, on the Gentoo wiki.
