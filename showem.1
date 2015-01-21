@@ -1,4 +1,4 @@
-.TH SHOWEM 1 "Version 1.0.0: July 2014"
+.TH SHOWEM 1 "Version 1.0.1: January 2015"
 .SH NAME
 showem \- monitor the progress of a parallel \fBemerge\fR(1)
 .SH SYNOPSIS
@@ -9,7 +9,7 @@ showem \- monitor the progress of a parallel \fBemerge\fR(1)
 is a very simple utility script, which allows you to monitor the progress of
 a parallel \fBemerge\fR(1). 
 
-When invoked, it shows a split screen display, which updates once a second.
+When invoked, it shows a split screen display, which updates once a second (or as otherwise specified by the \fB--wait-seconds\fR option).
 The top part shows the tail of the current \fBPortage\fR(5) download log, 
 and the lower part shows the tail of the most recent \fBPortage\fR(5)
 build log.
@@ -27,6 +27,10 @@ Exit \fBshowem\fR using \fBCtrl-c\fR, when done.
 .TP
 .BR \-h ", " \-\-help
 Displays a short help screen, and exits.
+.TP
+.BR \-s ", " \-\-wait\-seconds\=S
+Specifies the number of seconds, S, to pause between screen refreshes.
+The default is 1.
 .TP
 .BR \-V ", " \-\-version
 Displays the version number of \fBshowem\fR, and exits.
