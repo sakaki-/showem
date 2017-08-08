@@ -27,8 +27,8 @@ set -u
 
 # ********************** variables ********************* 
 PROGNAME="$(basename "${0}")"
-VERSION="1.0.1"
-PORTAGE_BUILD_DIR="/var/tmp/portage"
+VERSION="1.0.2"
+PORTAGE_BUILD_DIR="$(portageq envvar PORTAGE_TMPDIR)/portage"
 MAIN_LOG_DIR="/var/log"
 EMERGE_FETCH_LOG="emerge-fetch.log"
 MIN_COLS_ALLOWED=80
