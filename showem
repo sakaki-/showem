@@ -27,7 +27,7 @@ set -u
 
 # ********************** variables ********************* 
 PROGNAME="$(basename "${0}")"
-VERSION="1.0.2"
+VERSION="1.0.3"
 PORTAGE_BUILD_DIR="$(portageq envvar PORTAGE_TMPDIR)/portage"
 MAIN_LOG_DIR="/var/log"
 EMERGE_FETCH_LOG="emerge-fetch.log"
@@ -175,7 +175,7 @@ main_monitor_loop() {
         LINES_USED=5 # minimum even when no content to print
         # find single most recent log file in /var/tmp/portage, if any
         if [ -d "${PORTAGE_BUILD_DIR}" ]; then
-            CURRENT_LOG=$(find "${PORTAGE_BUILD_DIR}" -name '*.log' -type f \
+            CURRENT_LOG=$(find "${PORTAGE_BUILD_DIR}" -name '*.log' \( -type f -or -type l \) \
                 -printf '%T@ "%p"\n' | sort -nr | head -1 | cut -d'"' -f2)
         else
             CURRENT_LOG=""
