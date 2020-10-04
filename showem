@@ -190,7 +190,10 @@ monitor_current_builds() {
     # This function reports any changes from the last scan
     # If a new build is run, or a build's sandbox pid changed,
     # it will print a line with the following format:
-    #     <PKGNAME> <(new)SANDBOX_PID> <START_TIME>
+    #     A <PKGNAME> <(new)SANDBOX_PID> <START_TIME>
+    # If a build has ended (finished, or otherwise interrupted),
+    # it will print a line with the following format:
+    #     D <PKGNAME>
     # START_TIME is epoch in seconds, as an integer.
 
     # BUILDS array: key=<package name>, value=<pid of sandbox>
@@ -208,13 +211,14 @@ monitor_current_builds() {
             if [[ ! "$ORIG_PID" || "$ORIG_PID" != "$SANDBOX_PID"  ]]; then
                 BUILDS["$PKGNAME"]="$SANDBOX_PID"
                 EXTRA_INFO="$(get_extra_info "$PKGNAME")"
-                echo "$PKGNAME $SANDBOX_PID $EXTRA_INFO"
+                echo "A $PKGNAME $SANDBOX_PID $EXTRA_INFO"
             fi
             BUILDS_USED+=("$PKGNAME")
         done <<< "$(get_current_builds)"
         for PKGNAME in "${!BUILDS[@]}"; do
             if ! in_list "$PKGNAME" "${BUILDS_USED[@]}"; then
                 unset BUILDS["$PKGNAME"]
+                echo "D $PKGNAME"
             fi
         done
         sleep ${REFRESH_WAIT_SECS}
@@ -288,16 +292,29 @@ main_monitor_loop() {
     do
         # Read any changes in the current builds
         while read -t 0; do # Check whether there is new data without blocking
-            read PKGNAME SANDBOX_PID START_TIME INDEX TOTAL
+            read MODIFIER PKGNAME SANDBOX_PID START_TIME INDEX TOTAL
             if [[ -z "$PKGNAME" ]]; then
                 # Invalid format
                 continue
             fi
-            DIR="$(get_log_directory "$PKGNAME" "$SANDBOX_PID")"
-            if [[ "$DIR" ]]; then
-                BUILD_DIRS["$PKGNAME"]="$DIR"
-                BUILD_START_TIMES["$PKGNAME"]="$START_TIME"
-                EXTRA_INFOS["$PKGNAME"]="$INDEX out of $TOTAL"
+            if [[ "$MODIFIER" == 'A' ]]; then
+                DIR="$(get_log_directory "$PKGNAME" "$SANDBOX_PID")"
+                if [[ "$DIR" ]]; then
+                    BUILD_DIRS["$PKGNAME"]="$DIR"
+                    BUILD_START_TIMES["$PKGNAME"]="$START_TIME"
+                    EXTRA_INFOS["$PKGNAME"]="$INDEX out of $TOTAL"
+                fi
+            elif [[ "$MODIFIER" == 'D' ]]; then
+                # Here we do not unset the entry in BUILD_DIRS, because:
+                # (1) If the build is successful, the build directory
+                # will be deleted. The next part of the script
+                # will unset it for us.
+                # (2) If the build is not successful, the build
+                # directory will remain. We would like to be able
+                # to still track the logs of this build, but not
+                # show it in the "currently being built" list.
+                unset BUILD_START_TIMES["$PKGNAME"]
+                unset EXTRA_INFOS["$PKGNAME"]
             fi
         done
 
@@ -350,11 +367,15 @@ main_monitor_loop() {
             echo "Package(s) being built now:"
             ((LINES_USED++))
             OVERVIEW_LINES_USED=0
-            for PKGNAME in "${!BUILD_DIRS[@]}"; do
+
+            # Here, we use the array BUILD_START_TIMES because
+            # it contains the packages that are being built,
+            # while BUILD_DIRS also contains packages that failed.
+            for PKGNAME in "${!BUILD_START_TIMES[@]}"; do
                 # If it will not fit, and is the last line allowed,
                 # print elipses.
                 if [[ "$OVERVIEW_LINES_USED" -eq "$((MAX_NUM_OVERVIEW_LINES - 1))" \
-                          && "$MAX_NUM_OVERVIEW_LINES" -lt "${#BUILD_DIRS[@]}" ]]; then
+                          && "$MAX_NUM_OVERVIEW_LINES" -lt "${#BUILD_START_TIMES[@]}" ]]; then
                     echo -n "${GREEN_TEXT}|-${RESET_ATTS} "
                     echo -n "${BOLD_TEXT}${GREEN_TEXT}"
                     echo -n "$((${#BUILD_DIRS[@]} - OVERVIEW_LINES_USED))"
@@ -395,12 +416,19 @@ main_monitor_loop() {
         if [ -z "${CURRENT_LOG}" ]; then
             echo "Monitoring: no current Portage build log found (Ctrl-c to exit this viewer)."
             CURRENT_LOG="No Portage build log currently found"
+            CURRENT_PACKAGE_NAME="${CURRENT_LOG}"
         else
             echo "Tail of most recent Portage build log (Ctrl-c to exit this viewer):"
             warn_if_log_too_old "${CURRENT_LOG}"
             ((LINES_USED+=${?}))
-            CURRENT_PACKAGE_NAME=$(echo "${CURRENT_LOG#${PORTAGE_BUILD_DIR}/}" |\
-                cut -d '/' -f 1-2)
+
+            # Find the package name for the current log
+            for PKGNAME in "${!BUILD_DIRS[@]}"; do
+                if [[ "$CURRENT_LOG" == "${BUILD_DIRS[$PKGNAME]}"/* ]]; then
+                    CURRENT_PACKAGE_NAME="$PKGNAME"
+                    break
+                fi
+            done
             print_package_name_divider "-" "${CURRENT_PACKAGE_NAME}" $COLS_TO_ASSUME
             ((LINES_USED++))
             LINES_LEFT=$((LINES_TO_ASSUME-LINES_USED))
@@ -409,7 +437,7 @@ main_monitor_loop() {
         fi
         print_line_divider "=" "NONE"
         # Set xterm title to show current build log relative path
-        echo -ne "\033]0;${PROGNAME}: ${CURRENT_LOG#${PORTAGE_BUILD_DIR}/}\007"
+        echo -ne "\033]0;${PROGNAME}: ${CURRENT_PACKAGE_NAME}\007"
         sleep ${REFRESH_WAIT_SECS}
     done; }
 }
