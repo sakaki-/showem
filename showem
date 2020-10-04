@@ -38,7 +38,6 @@ LOG_FILE_STALE_MINS=5
 RED_TEXT="$(tput setaf 1)"
 GREEN_TEXT="$(tput setaf 2)"
 BOLD_TEXT="$(tput bold)"
-#BOLD_BLUE_TEXT="$(tput bold)$(tput setaf 4)"
 RESET_ATTS="$(tput sgr0)"
 
 # program arguments (booleans in this case)
@@ -199,11 +198,11 @@ monitor_current_builds() {
     # This function reports any changes from the last scan
     # If a new build is run, or a build's sandbox pid changed,
     # it will print a line with the following format:
-    #     A <PKGNAME> <(new)SANDBOX_PID> <START_TIME>
+    #     A <PKGNAME> <(new)SANDBOX_PID> <START_TIME> <INDEX> <TOTAL>
     # If a build has ended (finished, or otherwise interrupted),
     # it will print a line with the following format:
     #     D <PKGNAME>
-    # START_TIME is epoch in seconds, as an integer.
+    # START_TIME, INDEX and TOTAL are the same as in `get_extra_info()`.
 
     # BUILDS array: key=<package name>, value=<pid of sandbox>
     declare -A BUILDS=()
