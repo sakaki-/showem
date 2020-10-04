@@ -369,7 +369,7 @@ main_monitor_loop() {
         # Print overview of current builds
         print_line_divider "="
         ((LINES_USED++))
-        if [ "${#BUILD_DIRS[@]}" -eq 0 ]; then
+        if [ "${#BUILD_START_TIMES[@]}" -eq 0 ]; then
             echo "No packages are being built now."
             ((LINES_USED++))
         else
