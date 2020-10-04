@@ -170,6 +170,13 @@ in_list() {
     return 1
 }
 get_current_builds() {
+    # Usage: get_current_builds
+    # Prints a list of current builds, each in a line,
+    # in the following format:
+    #     <SANDBOX_PID> <PKGNAME>
+    # This function and `get_extra_info()` are inspired by genlop.
+    # genlop (Gentoo Linux log parser) is published under GPL v2 or above.
+    # Its source code can be found under
     # https://github.com/gentoo-perl/genlop/blob/master/genlop#L709
     ps ax -o pid,args | tail -n +2 | sed -e's/^ *//' | \
         grep ' sandbox ' | grep -v -e ' grep ' -e 'pid-ns-init ' | sed -re 's@^([0-9]+)\s*\[(.+?)\].*@\1 \2@'
@@ -183,6 +190,8 @@ get_extra_info() {
     # INDEX is the order of the package in the emerge sequence which
     # the last <PKGNAME> build is in.
     # TOTAL is the total number of packages in that emerge sequence.
+
+    # Inspired by https://github.com/gentoo-perl/genlop/blob/master/genlop#L625
     grep -E -e '^[0-9]+:  >>> emerge \([0-9]+ of [0-9]+\) '"$PKGNAME"' to' "$MAIN_LOG_DIR/$EMERGE_LOG" | \
         tail -n1 | sed -re 's@^([0-9]+):  >>> emerge \(([0-9]+) of ([0-9]+)\) ('"$PKGNAME"') to.*@\1 \2 \3@'
 }
