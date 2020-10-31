@@ -25,23 +25,25 @@
 
 set -u
 
-# ********************** variables ********************* 
+# ********************** variables *********************
 PROGNAME="$(basename "${0}")"
 VERSION="1.0.3"
 PORTAGE_BUILD_DIR="$(portageq envvar PORTAGE_TMPDIR)/portage"
 MAIN_LOG_DIR="/var/log"
+EMERGE_LOG="emerge.log"
 EMERGE_FETCH_LOG="emerge-fetch.log"
 MIN_COLS_ALLOWED=80
 MIN_LINES_ALLOWED=24
 LOG_FILE_STALE_MINS=5
 RED_TEXT="$(tput setaf 1)"
 GREEN_TEXT="$(tput setaf 2)"
+BOLD_TEXT="$(tput bold)"
 RESET_ATTS="$(tput sgr0)"
 
 # program arguments (booleans in this case)
 declare -i ARG_HELP=0 ARG_VERSION=0 REFRESH_WAIT_SECS=1
 
-# ***************** various functions ****************** 
+# ***************** various functions ******************
 cleanup_and_exit_with_code() {
     # add any additional cleanup code here
     trap - EXIT
@@ -156,10 +158,186 @@ process_command_line_options() {
         cleanup_and_exit_with_code 0
     fi
 }
+in_list() {
+    local ARG="$1" CUR
+    shift
+    for CUR in "$@"; do
+        if [[ "$ARG" == "$CUR" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+get_current_builds() {
+    # Usage: get_current_builds
+    # Prints a list of current builds, each in a line,
+    # in the following format:
+    #     <SANDBOX_PID> <PKGNAME>
+    # This function and `get_extra_info()` are inspired by genlop.
+    # genlop (Gentoo Linux log parser) is published under GPL v2 or above.
+    # Its source code can be found under
+    # https://github.com/gentoo-perl/genlop/blob/master/genlop#L709
+    ps ax -o pid,args | tail -n +2 | sed -e's/^ *//' | \
+        grep ' sandbox ' | grep -v -e ' grep ' -e 'pid-ns-init ' | sed -re 's@^([0-9]+)\s*\[(.+?)\].*@\1 \2@'
+}
+get_extra_info() {
+    # Usage: get_extra_info <PKGNAME>
+    # Prints extra information for the last <PKGNAME> build,
+    # in the following format:
+    #     <START_TIME> <INDEX> <TOTAL>
+    # START_TIME is the start time in epoch in seconds, as an integer.
+    # INDEX is the order of the package in the emerge sequence which
+    # the last <PKGNAME> build is in.
+    # TOTAL is the total number of packages in that emerge sequence.
+
+    # Inspired by https://github.com/gentoo-perl/genlop/blob/master/genlop#L625
+    grep -E -e '^[0-9]+:  >>> emerge \([0-9]+ of [0-9]+\) '"$PKGNAME"' to' "$MAIN_LOG_DIR/$EMERGE_LOG" | \
+        tail -n1 | sed -re 's@^([0-9]+):  >>> emerge \(([0-9]+) of ([0-9]+)\) ('"$PKGNAME"') to.*@\1 \2 \3@'
+}
+monitor_current_builds() {
+    # This function reports any changes from the last scan
+    # If a new build is run, or a build's sandbox pid changed,
+    # it will print a line with the following format:
+    #     A <PKGNAME> <(new)SANDBOX_PID> <START_TIME> <INDEX> <TOTAL>
+    # If a build has ended (finished, or otherwise interrupted),
+    # it will print a line with the following format:
+    #     D <PKGNAME>
+    # START_TIME, INDEX and TOTAL are the same as in `get_extra_info()`.
+
+    # BUILDS array: key=<package name>, value=<pid of sandbox>
+    declare -A BUILDS=()
+    declare -a BUILDS_USED
+    local SANDBOX_PID PKGNAME ORIG_PID EXTRA_INFO
+    while true; do
+        BUILDS_USED=()
+        while read SANDBOX_PID PKGNAME; do
+            if [[ -z "$PKGNAME" ]]; then
+                break
+            fi
+            ORIG_PID="${BUILDS[$PKGNAME]-}"
+            # If this is a new build, or the pid has changed
+            if [[ ! "$ORIG_PID" || "$ORIG_PID" != "$SANDBOX_PID"  ]]; then
+                BUILDS["$PKGNAME"]="$SANDBOX_PID"
+                EXTRA_INFO="$(get_extra_info "$PKGNAME")"
+                echo "A $PKGNAME $SANDBOX_PID $EXTRA_INFO"
+            fi
+            BUILDS_USED+=("$PKGNAME")
+        done <<< "$(get_current_builds)"
+        for PKGNAME in "${!BUILDS[@]}"; do
+            if ! in_list "$PKGNAME" "${BUILDS_USED[@]}"; then
+                unset BUILDS["$PKGNAME"]
+                echo "D $PKGNAME"
+            fi
+        done
+        sleep ${REFRESH_WAIT_SECS}
+    done
+}
+get_log_directory() {
+    # Usage: get_log_directory PKGNAME SANDBOX_PID
+    # Prints the log directory of package PKGNAME
+    # of which the sandbox pid is SANDBOX_PID.
+    #
+    # Note that this may fail because, e.g.
+    # The corresponding sandbox process has already
+    # terminated, in which case we print out nothing.
+    local PKGNAME="$1" SANDBOX_PID="$2"
+    local RET="$(tr '\0' '\n' < /proc/"$SANDBOX_PID"/environ | grep '^PORTAGE_TMPDIR=')"
+    local DIR="${RET#PORTAGE_TMPDIR=}/portage/$PKGNAME/temp"
+    if [[ -e "$DIR" ]]; then
+        echo "$DIR"
+    fi
+}
+print_duration_segment() {
+    # Usage print_duration_segment <COUNT> <UNIT> [<LAST>]
+    # If <LAST> is not specified, this function prints a
+    # trailing space. If <LAST> is specified, there will be
+    # no trailing sapce.
+    local COUNT="$1" UNIT="$2" LAST="${3+_}"
+    echo -n "${COUNT}${UNIT}"
+    if [[ -z "$LAST" ]]; then
+        echo -n " "
+    fi
+}
+format_duration() {
+    # Usage: format_duration <DURATION>
+    # where DURATION is an integer in seconds.
+    # Prints a user-readable string for DURATION.
+    local DURATION="$1"
+    local REMAINING="$DURATION"
+    local SECONDS=$((REMAINING % 60))
+    REMAINING=$((REMAINING / 60))
+    local MINUTES=$((REMAINING % 60))
+    REMAINING=$((REMAINING / 60))
+    local HOURS=$((REMAINING % 24))
+    REMAINING=$((REMAINING / 24))
+    local DAYS="$REMAINING"
+
+    case 1 in
+        "$((DAYS > 0))")
+            print_duration_segment "$DAYS" d
+            ;& # Fall-through marker
+        "$((HOURS > 0))")
+            print_duration_segment "$HOURS" h
+            ;&
+        "$((MINUTES > 0))")
+            print_duration_segment "$MINUTES" m
+            ;&
+        *)
+            print_duration_segment "$SECONDS" s LAST
+            ;;
+    esac
+}
 main_monitor_loop() {
+    # BUILD_DIRS: key=<PKGNAME> value=<BUILD_DIR>
+    declare -A BUILD_DIRS=()
+    declare -A BUILD_START_TIMES=()
+    declare -A EXTRA_INFOS=()
+    local MODIFIER PKGNAME SANDBOX_PID DIR START_TIME INDEX TOTAL
+    local BUILD_DURATION TIME_NOW LINE OVERVIEW_LINES_USED
     cd /
-    while true
+    # Sleep a little bit for the monitor to initialize
+    monitor_current_builds | { sleep 0.1; while true
     do
+        # Read any changes in the current builds
+        while read -t 0; do # Check whether there is new data without blocking
+            read MODIFIER PKGNAME SANDBOX_PID START_TIME INDEX TOTAL
+            if [[ -z "$PKGNAME" ]]; then
+                # Invalid format
+                continue
+            fi
+            if [[ "$MODIFIER" == 'A' ]]; then
+                DIR="$(get_log_directory "$PKGNAME" "$SANDBOX_PID")"
+                if [[ "$DIR" ]]; then
+                    BUILD_DIRS["$PKGNAME"]="$DIR"
+                    BUILD_START_TIMES["$PKGNAME"]="$START_TIME"
+                    EXTRA_INFOS["$PKGNAME"]="$INDEX out of $TOTAL"
+                fi
+            elif [[ "$MODIFIER" == 'D' ]]; then
+                # Here we do not unset the entry in BUILD_DIRS, because:
+                # (1) If the build is successful, the build directory
+                # will be deleted. The next part of the script
+                # will unset it for us.
+                # (2) If the build is not successful, the build
+                # directory will remain. We would like to be able
+                # to still track the logs of this build, but not
+                # show it in the "currently being built" list.
+                unset BUILD_START_TIMES["$PKGNAME"]
+                unset EXTRA_INFOS["$PKGNAME"]
+            fi
+        done
+
+        # Clean up any packages whose log dir does not exist
+        #
+        # Log dir that does not exist means that
+        # the package has been successfully merged.
+        for PKGNAME in "${!BUILD_DIRS[@]}"; do
+            if [[ ! -e "${BUILD_DIRS[$PKGNAME]}" ]]; then
+                unset BUILD_DIRS["$PKGNAME"]
+                unset BUILD_START_TIMES["$PKGNAME"]
+                unset EXTRA_INFOS["$PKGNAME"]
+            fi
+        done
+
         # don't try to cope with displays that are too small
         COLS_TO_ASSUME="$(tput cols)"
         LINES_TO_ASSUME="$(tput lines)"
@@ -171,12 +349,13 @@ main_monitor_loop() {
             sleep 1
             continue
         fi
+        MAX_NUM_OVERVIEW_LINES=$((LINES_TO_ASSUME/5)) # maximum number of lines to show overview
         NUM_DOWNLOAD_LINES=$((LINES_TO_ASSUME/5)) # lines to show download log
         LINES_USED=5 # minimum even when no content to print
-        # find single most recent log file in /var/tmp/portage, if any
-        if [ -d "${PORTAGE_BUILD_DIR}" ]; then
-            CURRENT_LOG=$(find "${PORTAGE_BUILD_DIR}" -name '*.log' \( -type f -or -type l \) \
-                -printf '%T@ "%p"\n' | sort -nr | head -1 | cut -d'"' -f2)
+        # find single most recent log file in each package's log directory, if any
+        if [ "${#BUILD_DIRS[@]}" -gt 0 ]; then
+            CURRENT_LOG="$(find "${BUILD_DIRS[@]}" -name '*.log' \( -type f -or -type l \) \
+                -printf '%T@ "%p"\n' | sort -nr | head -1 | cut -d'"' -f2)"
         else
             CURRENT_LOG=""
         fi
@@ -185,26 +364,79 @@ main_monitor_loop() {
             -type f -mmin -1 -print)
         # display a summary
         clear
+
+        # Print overview of current builds
+        print_line_divider "="
+        ((LINES_USED++))
+        if [ "${#BUILD_START_TIMES[@]}" -eq 0 ]; then
+            echo "No packages are being built now."
+            ((LINES_USED++))
+        else
+            echo "Package(s) being built now:"
+            ((LINES_USED++))
+            OVERVIEW_LINES_USED=0
+
+            # Here, we use the array BUILD_START_TIMES because
+            # it contains the packages that are being built,
+            # while BUILD_DIRS also contains packages that failed.
+            for PKGNAME in "${!BUILD_START_TIMES[@]}"; do
+                # If it will not fit, and is the last line allowed,
+                # print elipses.
+                if [[ "$OVERVIEW_LINES_USED" -eq "$((MAX_NUM_OVERVIEW_LINES - 1))" \
+                          && "$MAX_NUM_OVERVIEW_LINES" -lt "${#BUILD_START_TIMES[@]}" ]]; then
+                    echo -n "${GREEN_TEXT}|-${RESET_ATTS} "
+                    echo -n "${BOLD_TEXT}${GREEN_TEXT}"
+                    echo -n "$((${#BUILD_DIRS[@]} - OVERVIEW_LINES_USED))"
+                    echo "${RESET_ATTS} more"
+                    ((OVERVIEW_LINES_USED++))
+                    ((LINES_USED++))
+                    break
+                fi
+                TIME_NOW="$(date +%s)"
+                START_TIME="${BUILD_START_TIMES[$PKGNAME]}"
+                BUILD_DURATION=$((TIME_NOW - START_TIME))
+                LINE="|- $PKGNAME - $(format_duration "${BUILD_DURATION}") - ${EXTRA_INFOS[$PKGNAME]}"
+                # Fold line
+                LINE="$(fold -w ${COLS_TO_ASSUME} <<< "$LINE" | head -n1)"
+                # Add color
+                LINE="$(sed -re "s/[ |]-/${GREEN_TEXT}&${RESET_ATTS}/g" \
+                        -e "s/ ([0-9]+)/ ${BOLD_TEXT}${GREEN_TEXT}\\1${RESET_ATTS}/g" <<< "$LINE")"
+                echo "$LINE"
+                ((OVERVIEW_LINES_USED++))
+                ((LINES_USED++))
+            done
+        fi
+
+        # Print portage download logs
         print_line_divider "="
         if [ -z "${FETCH_LOG}" ]; then
             echo "Monitoring: Portage background download log static for >= 1 minute."
         else
             echo "Tail of Portage background download log:"
-            print_line_divider 
+            print_line_divider
             tail -n $((NUM_DOWNLOAD_LINES+1)) "${FETCH_LOG}" | sed -e '$a\' | \
                 fold -w ${COLS_TO_ASSUME} | tail -n ${NUM_DOWNLOAD_LINES}
             ((LINES_USED+=(NUM_DOWNLOAD_LINES+1)))
         fi
+
+        # Print portage build logs
         print_line_divider "="
-        if [ -z "${CURRENT_LOG}" ]; then       
+        if [ -z "${CURRENT_LOG}" ]; then
             echo "Monitoring: no current Portage build log found (Ctrl-c to exit this viewer)."
             CURRENT_LOG="No Portage build log currently found"
+            CURRENT_PACKAGE_NAME="${CURRENT_LOG}"
         else
             echo "Tail of most recent Portage build log (Ctrl-c to exit this viewer):"
             warn_if_log_too_old "${CURRENT_LOG}"
             ((LINES_USED+=${?}))
-            CURRENT_PACKAGE_NAME=$(echo "${CURRENT_LOG#${PORTAGE_BUILD_DIR}/}" |\
-                cut -d '/' -f 1-2)
+
+            # Find the package name for the current log
+            for PKGNAME in "${!BUILD_DIRS[@]}"; do
+                if [[ "$CURRENT_LOG" == "${BUILD_DIRS[$PKGNAME]}"/* ]]; then
+                    CURRENT_PACKAGE_NAME="$PKGNAME"
+                    break
+                fi
+            done
             print_package_name_divider "-" "${CURRENT_PACKAGE_NAME}" $COLS_TO_ASSUME
             ((LINES_USED++))
             LINES_LEFT=$((LINES_TO_ASSUME-LINES_USED))
@@ -213,9 +445,9 @@ main_monitor_loop() {
         fi
         print_line_divider "=" "NONE"
         # Set xterm title to show current build log relative path
-        echo -ne "\033]0;${PROGNAME}: ${CURRENT_LOG#${PORTAGE_BUILD_DIR}/}\007"
+        echo -ne "\033]0;${PROGNAME}: ${CURRENT_PACKAGE_NAME}\007"
         sleep ${REFRESH_WAIT_SECS}
-    done
+    done; }
 }
 # *************** start of script proper ***************
 check_that_stdout_is_terminal
